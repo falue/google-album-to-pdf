@@ -1,0 +1,8 @@
+/_tools
+__pycache__
+.api.log
+.caddy.log
+.DS_Store
+.venv
+.claude
+/out
