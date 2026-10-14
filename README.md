@@ -4,7 +4,7 @@ Turns a public Google Photos album into a clean PDF.
 
 ## What it does
 
-- Title page with the album title only
+- Title page: album cover filling the whole page, album title on top with a white outline
 - 3–5 photos per page, laid out to use the space well, never cropped
 - In-between album titles start a new page, title on top
 - Videos are included as still thumbnails
@@ -27,6 +27,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `-q 200` | 200 | photo resolution in DPI |
 | `-c 10` | 10 | JPEG compression 0–99, higher = smaller file |
 | `-i` | off | ignore comments and reactions |
+| `-n` | off | no album cover on the title page |
 | `--font X.ttf` | Arial | text font |
 
 ## Compression

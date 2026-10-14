@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from fpdf import FPDF
+from fpdf.enums import StrokeJoinStyle, TextMode
 
 RPC_URL = "https://photos.google.com/_/PhotosUi/data/batchexecute"
 ORDER_KEY = "101428965"  # position of photos and text in the album
@@ -63,7 +64,7 @@ def fetch_captions(album_id, key):
 
 
 def fetch_album(url, comments=True):
-    """Return (album title, album caption, sections) of a public album link."""
+    """Return (album title, cover url, album caption, sections) of a public album link."""
     with urllib.request.urlopen(url) as resp:  # follows photos.app.goo.gl redirect
         share = urllib.parse.urlparse(resp.geturl())
     album_id = share.path.rstrip("/").split("/")[-1]
@@ -73,7 +74,7 @@ def fetch_album(url, comments=True):
     entries, texts, token = [], {}, None
     while True:
         data = rpc("snAcKc", [album_id, token, None, key])
-        title = data[3][1]
+        title, cover = data[3][1], data[3][4]
         for item in data[1]:  # videos included: their url serves the thumbnail
             url, w, h = item[1][:3]
             photo = Photo(item[0], url, w, h, captions.get(item[0], ""))
@@ -91,7 +92,7 @@ def fetch_album(url, comments=True):
             sections.append(Section(entry))
         else:
             sections[-1].photos.append(entry)
-    return title, captions.get(None, ""), [s for s in sections if s.title or s.photos]
+    return title, cover and cover[0], captions.get(None, ""), [s for s in sections if s.title or s.photos]
 
 
 def arrange(photos, w, h, gap):
@@ -175,10 +176,10 @@ def download(url):
         return resp.read()
 
 
-def build_pdf(title, album_caption, sections, out, font, page="A4", landscape=False, dpi=200, compression=10,
+def build_pdf(title, cover_url, album_caption, sections, out, font, page="A4", landscape=False, dpi=200, compression=10,
               fallback_fonts=("/System/Library/Fonts/Apple Color Emoji.ttc",
                               "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-              margin=12, gap=4, title_size=32, heading_size=20, caption_size=7, caption_gap=1.5):
+              margin=12, gap=4, title_size=32, heading_size=20, caption_size=7, caption_gap=1.5, outline=0.4):
     pdf = FPDF(orientation="L" if landscape else "P", unit="mm", format=page)
     pdf.set_auto_page_break(False)
     pdf.set_margins(margin, margin)
@@ -189,19 +190,34 @@ def build_pdf(title, album_caption, sections, out, font, page="A4", landscape=Fa
     content_w, content_h = pdf.w - 2 * margin, pdf.h - 2 * margin
     lines = lambda text, width: len(pdf.multi_cell(width, text=text, dry_run=True, output="LINES"))
 
+    px = lambda mm: max(1, round(mm / 25.4 * dpi))
+    # -no: no play button on video thumbnails, -l: JPEG quality
+    suffix = f"-no-l{min(100, max(1, 100 - compression))}"
+
     pdf.add_page()
+    if cover_url:  # -c: crop to fill the whole page
+        pdf.image(io.BytesIO(download(f"{cover_url}=w{px(pdf.w)}-h{px(pdf.h)}-c{suffix}")), 0, 0, pdf.w, pdf.h)
     pdf.set_font("text", size=title_size)
     title_h = lines(title, content_w) * pdf.font_size * 1.3
     pdf.set_font_size(caption_size + 2)
     notes_h = lines(album_caption, content_w) * pdf.font_size * 1.4 + 3 * gap if album_caption else 0
-    pdf.set_y((pdf.h - title_h - notes_h) / 2)
+    # white outline (stroke is centered on the glyph edge), then the title on top
     pdf.set_font_size(title_size)
-    pdf.multi_cell(content_w, pdf.font_size * 1.3, title, align="C")
-    if album_caption:
+    for mode in (TextMode.STROKE, TextMode.FILL):
+        with pdf.local_context(text_mode=mode, draw_color=255, stroke_join_style=StrokeJoinStyle.ROUND):
+            pdf.set_y((pdf.h - title_h - notes_h) / 2)
+            pdf.set_line_width(pdf.font_size * outline)
+            pdf.multi_cell(content_w, pdf.font_size * 1.3, title, align="C")
+    if album_caption:  # on a white box
         pdf.set_font_size(caption_size + 2)
+        line_h, pad, y = pdf.font_size * 1.4, gap / 2, pdf.get_y() + 3 * gap
+        texts = pdf.multi_cell(content_w, text=album_caption, dry_run=True, output="LINES")
+        box_w = max(pdf.get_string_width(t) for t in texts) + 2 * pad
+        pdf.set_fill_color(255)
+        pdf.rect((pdf.w - box_w) / 2, y - pad, box_w, len(texts) * line_h + 2 * pad, style="F")
         pdf.set_text_color(90)
-        pdf.set_y(pdf.get_y() + 3 * gap)
-        pdf.multi_cell(content_w, pdf.font_size * 1.4, album_caption, align="C")
+        pdf.set_y(y)
+        pdf.multi_cell(content_w, line_h, album_caption, align="C")
 
     pdf.set_font_size(caption_size)
     caption_line_h = pdf.font_size * 1.3
@@ -231,9 +247,7 @@ def build_pdf(title, album_caption, sections, out, font, page="A4", landscape=Fa
             placed = [(p, x + margin, y + dy, bw, bh) for p, (x, y, bw, bh) in zip(section.photos[start:end], boxes)]
             pages.append((section.title if i == 0 else None, placed))
 
-    px = lambda mm: max(1, round(mm / 25.4 * dpi))
-    # -no: no play button on video thumbnails, -l: JPEG quality
-    urls = [f"{p.url}=w{px(bw)}-h{px(bh)}-no-l{min(100, max(1, 100 - compression))}" for _, placed in pages for p, _, _, bw, bh in placed]
+    urls = [f"{p.url}=w{px(bw)}-h{px(bh)}{suffix}" for _, placed in pages for p, _, _, bw, bh in placed]
     with ThreadPoolExecutor(8) as pool:
         images = pool.map(download, urls)
         for heading, placed in pages:
@@ -262,15 +276,16 @@ def main():
     parser.add_argument("-c", "--compression", type=int, default=10,
                         help="JPEG compression 0-99, higher = smaller file (default 10)")
     parser.add_argument("-i", "--ignore-comments", action="store_true", help="leave out comments and reactions")
+    parser.add_argument("-n", "--no-cover", action="store_true", help="plain white title page, no album cover")
     parser.add_argument("--font", default="/System/Library/Fonts/Supplemental/Arial.ttf", help="TTF text font")
     args = parser.parse_args()
 
-    title, album_caption, sections = fetch_album(args.url, not args.ignore_comments)
+    title, cover_url, album_caption, sections = fetch_album(args.url, not args.ignore_comments)
     name = args.output or (re.sub(r"[^\w\- ]+", "", title).strip() or "album") + ".pdf"
     out = Path(__file__).parent / "out" / name
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"{title}: {sum(len(s.photos) for s in sections)} photos, {len(sections)} sections -> {out}")
-    build_pdf(title, album_caption, sections, out, args.font, args.page, args.landscape, args.quality, args.compression)
+    build_pdf(title, None if args.no_cover else cover_url, album_caption, sections, out, args.font, args.page, args.landscape, args.quality, args.compression)
 
 
 if __name__ == "__main__":
