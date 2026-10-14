@@ -9,6 +9,8 @@ Turns a public Google Photos album into a clean PDF.
 - In-between album titles start a new page, title on top
 - Videos are included as still thumbnails
 - Photos are downloaded at exactly the size they are printed
+- Comments and reactions are printed under their photo, album comments on the title page
+- Uses macOS system fonts (Arial, Apple Color Emoji, Arial Unicode); on other systems pass `--font`
 
 ## Usage
 
@@ -24,7 +26,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `-l` | portrait | landscape |
 | `-q 200` | 200 | photo resolution in DPI |
 | `-c 10` | 10 | JPEG compression 0–99, higher = smaller file |
-| `--font X.ttf` | Helvetica | font for titles beyond Latin-1 (emoji, CJK) |
+| `-i` | off | ignore comments and reactions |
+| `--font X.ttf` | Arial | text font |
 
 ## Compression
 
